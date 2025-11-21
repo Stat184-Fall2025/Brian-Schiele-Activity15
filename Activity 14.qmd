@@ -1,0 +1,441 @@
+---
+title: "Activity 14"
+format: pdf
+author: 'Brian Schiele'
+date: today
+editor: visual
+---
+
+First we will look at the US Armed Forces data frame from Activity 8, the code used to wrangle the data can be found in the code appendix.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+library(googlesheets4)
+library(tidyverse)
+gs4_deauth()
+forcesHeaders <- read_sheet( ##set the headers we will use
+  ss = 'https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?gid=597536282#gid=597536282',
+  col_names = FALSE,
+  n_max = 3
+)
+
+rawForces <- read_sheet( ##get the unwrangled data
+  ss = 'https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?gid=597536282#gid=597536282',
+  col_names = FALSE,
+  skip = 3,
+  n_max = 28,
+  col_types = 'c'
+)
+
+branchNames <- rep( ##set the branch names we will use
+  x = c("Army", "Navy", "Marine Corps", "Air Force", "Space Force", "Total"),
+  each = 3
+)
+
+tempHeaders <-paste(
+  c("", branchNames),
+  forcesHeaders[3,],
+  sep = "."
+)
+
+names(rawForces)<- tempHeaders
+
+cleanForces <- rawForces %>% ##clean the data by renaming and getting the frequencys by parsing
+  rename(Pay.Grade = '.Pay Grade') %>%
+  dplyr::select(!contains("Total")) %>%
+  pivot_longer(cols = !Pay.Grade,
+               names_to = "Branch.Sex",
+               values_to = "Frequency") %>%
+  separate_wider_delim(
+    cols = Branch.Sex,
+    delim = ".",
+    names = c("Branch", "Sex")
+  ) %>%
+  mutate(
+    Frequency = na_if(Frequency, y = "N/A*"),
+    Frequency = parse_number(Frequency)
+  )
+
+```
+
+We will look at a frequency table that looks at enlisted soldiers in the Army and attempts to establish a connection with gender.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Fig 1. Frequency tables of Men(top) and Women(bottom) in the Army as Enlisteds"
+library(rvest)
+library(janitor)
+library(tidyverse)
+webRanks <- read_html("https://neilhatfield.github.io/Stat184_PayGradeRanks.html") %>%
+  html_elements(css = "table") %>%
+  html_table()
+
+rawRanks <- webRanks[[1]] # Extract the data frame of ranks
+
+# Wrangle Rank Data ----
+## Enter a value in the first cell (1, 1)
+rawRanks[1, 1] <- "Type"
+## Extract actual column headers
+rankHeaders <- rawRanks[1, ]
+## Apply headers as column names
+names(rawRanks) <- rankHeaders[1,]
+
+rawRanks <- rawRanks[-c(1, 26), ]
+
+cleanRanks <- rawRanks %>%
+  dplyr::select(!Type) %>% # Remove extra column
+  pivot_longer(
+    cols = !`Pay Grade`, # The improper name requires backticks
+    names_to = "Branch",
+    values_to = "Rank"
+  ) %>%
+  mutate(
+    Rank = na_if(x = Rank, y = "--")
+  )
+
+key_forcesRanks <- left_join(
+  x = cleanForces,
+  y = cleanRanks,
+  by = join_by(Pay.Grade == `Pay Grade`, Branch == Branch)
+)
+
+key_individualRanks <- key_forcesRanks %>%
+  filter(!is.na(Frequency)) %>% # Remove all cases with missing counts
+  uncount(
+    weights = Frequency
+  )
+
+##Filter Soldiers
+maleArmySoldiers <- key_individualRanks %>%
+  filter(Sex == 'Male',Branch == "Army", Pay.Grade %in% c('E1','E2','E3','E4','E5','E6','E7','E8','E9'))
+
+femaleArmySoldiers <- key_individualRanks %>%
+  filter(Sex == 'Female',Branch == "Army", Pay.Grade %in% c('E1','E2','E3','E4','E5','E6','E7','E8','E9'))
+
+##Create Male Table
+maleArmyTable <- maleArmySoldiers %>%
+  tabyl(Rank, Branch) %>% # Original Branch, Rank; flipped for improvement
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>% #out of all totals
+  adorn_pct_formatting(digits = 2) 
+
+## Add Absolute Frequencies ----
+formatNs <- attr(maleArmyTable, "core") %>%
+  adorn_totals(where = c("row", "col")) %>%
+  mutate(
+    across(where(is.numeric), .fns = ~format(.x, big.mark = ","))
+  )
+
+## Finalize Male Table ----
+maleArmyTable <- maleArmyTable %>%
+  adorn_ns(position = "front", ns = formatNs) %>%
+  select(-Total)
+
+# Create Female Table ----
+## Base Table ----
+femaleArmyTable <- femaleArmySoldiers %>%
+  tabyl(Rank, Branch) %>%
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) 
+
+## Add Absolute Frequencies ----
+formatNs <- attr(femaleArmyTable, "core") %>%
+  adorn_totals(where = c("row", "col")) %>%
+  mutate(
+    across(where(is.numeric), .fns = ~format(.x, big.mark = ","))
+  )
+
+## Finalize Female Table ----
+femaleArmyTable <- femaleArmyTable %>%
+  adorn_ns(position = "front", ns = formatNs) %>%
+  select(-Total)
+library(knitr)
+
+# Male table with caption
+kable(
+  maleArmyTable,
+  caption = "Table 1: Frequency table of male Army soldiers by Rank"
+)
+
+# Female table with caption
+kable(
+  femaleArmyTable,
+  caption = "Table 2: Frequency table of female Army soldiers by Rank"
+)
+```
+
+The first table pictured is for men, the second is for women. The rank columns shows the rank of a selected group of soldiers, the next column shows the count of those soldiers, and the Army column shows the percentage of that rank by gender, ex. there are 29,767 male privates which is 9.93% of all male army enlisted soldiers. From this we can see that overall proportions are very similar between genders, but at higher levels such as staff sergeant or sergeant first class there is a slightly higher proportion of men. Conversely there is a higher proportion of women who are private first class.
+
+Next we will look at a data visualization for baby names across a wide set of years. The code for the wrangling and production of this visualization can be found in the code appendix.
+
+```{r}
+#| echo: false
+#| fig-cap: "Fig 2. The Baby Names Mary Thomas James and Anna plotted by year and count"
+library(dcData)
+BabyNames <- dcData::BabyNames ##load data
+chosenBaby <- BabyNames %>%
+  filter(name %in% c("Mary", "Thomas", "James", "Anna")) %>% ##select names
+  group_by(name, year) %>% ##ireelevant gender
+  summarise(count = sum(count), .groups = "drop") ##get totals
+
+chosenBaby %>% ##Graph names
+  ggplot(aes(
+    x = year,
+    y = count,
+    color = name, ##new linetype and color by name
+    linetype = name
+  )) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Popularity of Baby Names Over Time",
+    x = "Year",
+    y = "Count of Babies",
+    color = "Name"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+With this visualization, we can see the popularity of baby names from about 1875-2010. The Y-axis denotes the number of babies born that year named a certain name, and the X-axis denotes the year. The legend on the right shows both the color and line type used for each name. With this graph we can see that the name Anna was overall the least popular, and that James and Mary competed for the top spot, makes sense, they are both biblical names. All of the names besides Anna peak from 1940-1960, during the Baby Boomer generation.
+
+Next, we will look at a visualization for a math problem called the **Box Problem**. The code for this problem and the visualization can be found in the appendix.
+
+```{r}
+#| echo: false
+#| fig-cap: "Fig 3. The Box Problem When the Sheet of Paper is 36 x 48"
+box.volume <- function(x){ ##Function to find volume
+  volume <- (36 -2*x) * (48-2*x) * x ##volume formula
+  return (volume)
+}
+# Domain for x
+xmax <- min(36, 48) / 2   # = 18 ##largest possible cut
+xs <- seq(0, xmax, length.out = 400) ##all values
+
+# Plot V(x)
+plot(xs, box.volume(xs), type = "l", lwd = 2, ##plot
+     xlab = "x (cut size, inches)",
+     ylab = "Volume V(x) (in^3)",
+     main = "Open-top box volume from 36 x 48 sheet")
+```
+
+From this visualization, we see the maximum volume we can get is 5239.8 cubic inches, from a cut of length 6.8 inches. Interpreting this, we can maximize the volume of our box with a cut of about 7 inches, and we can see that that it is a much slower decline of volume with cuts greater than 6.8 as opposed to less than 6.8.
+
+Finally, lets talk about what I have learned in this class. I love sports statistics, and I like playing around with them in my spare time. This class has opened up that world to me so much more, I had some experience with data wrangling, but topics like the join functions never made sense until this class, and now I use them in personal projects. A really cool unit to me was Chartjunk, I knew when I saw a data visualization I liked, but I didn't know WHY I liked it. That unit helped put into words why some visualizations worked for me and some didn't. Now when I make my own I try and incorporate those techniques the best I can.
+
+# Appendix A: Code
+
+This code is for the **Data Wrangling** Section of the Armed Forces data.
+
+```{r}
+#| message: false
+#| warning: false
+library(googlesheets4)
+library(tidyverse)
+gs4_deauth()
+forcesHeaders <- read_sheet( ##set the headers we will use
+  ss = 'https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?gid=597536282#gid=597536282',
+  col_names = FALSE,
+  n_max = 3
+)
+
+rawForces <- read_sheet( ##get the unwrangled data
+  ss = 'https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?gid=597536282#gid=597536282',
+  col_names = FALSE,
+  skip = 3,
+  n_max = 28,
+  col_types = 'c'
+)
+
+branchNames <- rep( ##set the branch names we will use
+  x = c("Army", "Navy", "Marine Corps", "Air Force", "Space Force", "Total"),
+  each = 3
+)
+
+tempHeaders <-paste(
+  c("", branchNames),
+  forcesHeaders[3,],
+  sep = "."
+)
+
+names(rawForces)<- tempHeaders
+
+cleanForces <- rawForces %>% ##clean the data by renaming and getting the frequencys by parsing
+  rename(Pay.Grade = '.Pay Grade') %>%
+  dplyr::select(!contains("Total")) %>%
+  pivot_longer(cols = !Pay.Grade,
+               names_to = "Branch.Sex",
+               values_to = "Frequency") %>%
+  separate_wider_delim(
+    cols = Branch.Sex,
+    delim = ".",
+    names = c("Branch", "Sex")
+  ) %>%
+  mutate(
+    Frequency = na_if(Frequency, y = "N/A*"),
+    Frequency = parse_number(Frequency)
+  )
+
+
+```
+
+Now here is the code for the frequency table of enlisted Army Soldiers.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Fig 1. Frequency tables of Men(top) and Women(bottom) in the Army as Enlisteds"
+library(rvest)
+library(janitor)
+library(tidyverse)
+webRanks <- read_html("https://neilhatfield.github.io/Stat184_PayGradeRanks.html") %>%
+  html_elements(css = "table") %>%
+  html_table()
+
+rawRanks <- webRanks[[1]] # Extract the data frame of ranks
+
+# Wrangle Rank Data ----
+## Enter a value in the first cell (1, 1)
+rawRanks[1, 1] <- "Type"
+## Extract actual column headers
+rankHeaders <- rawRanks[1, ]
+## Apply headers as column names
+names(rawRanks) <- rankHeaders[1,]
+
+rawRanks <- rawRanks[-c(1, 26), ]
+
+cleanRanks <- rawRanks %>%
+  dplyr::select(!Type) %>% # Remove extra column
+  pivot_longer(
+    cols = !`Pay Grade`, # The improper name requires backticks
+    names_to = "Branch",
+    values_to = "Rank"
+  ) %>%
+  mutate(
+    Rank = na_if(x = Rank, y = "--")
+  )
+
+key_forcesRanks <- left_join(
+  x = cleanForces,
+  y = cleanRanks,
+  by = join_by(Pay.Grade == `Pay Grade`, Branch == Branch)
+)
+
+key_individualRanks <- key_forcesRanks %>%
+  filter(!is.na(Frequency)) %>% # Remove all cases with missing counts
+  uncount(
+    weights = Frequency
+  )
+
+##Filter Soldiers
+maleArmySoldiers <- key_individualRanks %>%
+  filter(Sex == 'Male',Branch == "Army", Pay.Grade %in% c('E1','E2','E3','E4','E5','E6','E7','E8','E9'))
+
+femaleArmySoldiers <- key_individualRanks %>%
+  filter(Sex == 'Female',Branch == "Army", Pay.Grade %in% c('E1','E2','E3','E4','E5','E6','E7','E8','E9'))
+
+##Create Male Table
+maleArmyTable <- maleArmySoldiers %>%
+  tabyl(Rank, Branch) %>% # Original Branch, Rank; flipped for improvement
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>% #out of all totals
+  adorn_pct_formatting(digits = 2) 
+
+## Add Absolute Frequencies ----
+formatNs <- attr(maleArmyTable, "core") %>%
+  adorn_totals(where = c("row", "col")) %>%
+  mutate(
+    across(where(is.numeric), .fns = ~format(.x, big.mark = ","))
+  )
+
+## Finalize Male Table ----
+maleArmyTable <- maleArmyTable %>%
+  adorn_ns(position = "front", ns = formatNs) %>%
+  select(-Total)
+
+# Create Female Table ----
+## Base Table ----
+femaleArmyTable <- femaleArmySoldiers %>%
+  tabyl(Rank, Branch) %>%
+  adorn_totals(where = c("row", "col")) %>%
+  adorn_percentages(denominator = "all") %>%
+  adorn_pct_formatting(digits = 2) 
+
+## Add Absolute Frequencies ----
+formatNs <- attr(femaleArmyTable, "core") %>%
+  adorn_totals(where = c("row", "col")) %>%
+  mutate(
+    across(where(is.numeric), .fns = ~format(.x, big.mark = ","))
+  )
+
+## Finalize Female Table ----
+femaleArmyTable <- femaleArmyTable %>%
+  adorn_ns(position = "front", ns = formatNs) %>%
+  select(-Total)
+library(knitr)
+
+# Male table with caption
+kable(
+  maleArmyTable,
+  caption = "Table 1: Frequency table of male Army soldiers by Rank"
+)
+
+# Female table with caption
+kable(
+  femaleArmyTable,
+  caption = "Table 2: Frequency table of female Army soldiers by Rank"
+)
+```
+
+Here is the code for wrangling and creating the visualization for BabyNames data.
+
+```{r}
+#| echo: false
+#| fig-cap: "Fig 2. The Baby Names Mary Thomas James and Anna plotted by year and count"
+library(dcData)
+BabyNames <- dcData::BabyNames ##load data
+chosenBaby <- BabyNames %>%
+  filter(name %in% c("Mary", "Thomas", "James", "Anna")) %>% ##select names
+  group_by(name, year) %>% ##ireelevant gender
+  summarise(count = sum(count), .groups = "drop") ##get totals
+
+chosenBaby %>% ##Graph names
+  ggplot(aes(
+    x = year,
+    y = count,
+    color = name, ##new linetype and color by name
+    linetype = name
+  )) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Popularity of Baby Names Over Time",
+    x = "Year",
+    y = "Count of Babies",
+    color = "Name"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+Here is the code used for the function and plot of the box problem.
+
+```{r}
+#| echo: false
+#| fig-cap: "Fig 3. The Box Problem When the Sheet of Paper is 36 x 48"
+box.volume <- function(x){ ##Function to find volume
+  volume <- (36 -2*x) * (48-2*x) * x ##volume formula
+  return (volume)
+}
+# Domain for x
+xmax <- min(36, 48) / 2   # = 18 ##largest possible cut
+xs <- seq(0, xmax, length.out = 400) ##all values
+
+# Plot V(x)
+plot(xs, box.volume(xs), type = "l", lwd = 2, ##plot
+     xlab = "x (cut size, inches)",
+     ylab = "Volume V(x) (in^3)",
+     main = "Open-top box volume from 36 x 48 sheet")
+```
